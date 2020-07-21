@@ -1,0 +1,15 @@
+version: "3.7"
+
+services:
+  # THIS SAYS TO HAVE A SERVICE CALLED APP
+  app:
+
+    # SERVICE CONFIGURATION
+    build:
+      # SETTING CONTEXT TO THE CURRENT DIRECTORY
+      context: ./
+      dockerfile: Dockerfile
+
+    # ALLOWS REAL-TIME PROJECT UPDATE
+    volumes:
+      - .:/code
