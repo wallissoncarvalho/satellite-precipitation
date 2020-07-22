@@ -74,5 +74,6 @@ site
 # Pyre type checker
 **/.pyre/
 
-#Assets Files
-**/assets/
+# Assets Files
+assets/**/*
+assets/

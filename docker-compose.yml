@@ -1,15 +1,25 @@
-version: "3.7"
-
+version: '3.7'
 services:
   # THIS SAYS TO HAVE A SERVICE CALLED APP
   app:
 
-    # SERVICE CONFIGURATION
+    # Service configuration
     build:
-      # SETTING CONTEXT TO THE CURRENT DIRECTORY
-      context: ./
+      # Setting the context to the current directory
+      context: .
+      # Specifying the dockerfile
       dockerfile: Dockerfile
 
-    # ALLOWS REAL-TIME PROJECT UPDATE
+    # Allows real-time project update
     volumes:
       - .:/code
+
+    # Setting as true means we can interact with the container (i.e. open a bash shell)
+    tty: true
+
+
+    command: /bin/bash
+
+# Defining the volumes
+volumes:
+  code:
