@@ -4,5 +4,5 @@
 #Assets Folder
 assets/
 
-#App Folder
-app/
+#PyCache
+__pycache__/
