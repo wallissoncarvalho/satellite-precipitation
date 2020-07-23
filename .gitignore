@@ -1,8 +1,12 @@
 #Pycharm
 .idea/
 
-#Assets Folder
+#Assets Folders
 assets/
+mission_data/
 
 #PyCache
 __pycache__/
+
+#EarthData Credentials
+.earthdata_credentials
