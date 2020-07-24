@@ -37,12 +37,9 @@ class Nasa(object):
     """
     missions_products = {m: list(mission_product_dict[m]['products'].keys()) for m in mission_product_dict}
 
-    def __init__(self, username, password, mission, cache_dir=None):
-        self.session(username, password, mission, cache_dir)
-
-    def session(self, username, password, mission, cache_dir=None):
+    def __init__(self, username, password, mission, product, version=6, cache_dir=None):
         """
-        Function to initiate a dap session.
+        Initiate the object with a dap session.
 
         Parameters
         ----------
@@ -52,6 +49,10 @@ class Nasa(object):
             The password for the login.
         mission : str
             Mission name.
+        product : str
+            Data product associated with the mission.
+        version: int, optional
+            Data product version.
         cache_dir : str or None
             A path to cache the netcdf files for future reading. If None, the currently working directory is used.
 
@@ -59,13 +60,24 @@ class Nasa(object):
         -------
         Nasa object
         """
+        # Verifying the mission
         if mission in mission_product_dict:
             self.mission_dict = mission_product_dict[mission]
         else:
-            raise ValueError('mission should be one of: ' + ', '.join(mission_product_dict.keys()))
+            raise ValueError('Mission should be one of: ' + ', '.join(mission_product_dict.keys()))
 
         self.mission = mission
 
+        # Verifying the product
+        if product in self.mission_dict['product']:
+            self.product = product
+        else:
+            raise ValueError('Product must be one of: ' + ', '.join(self.mission_dict['products'].keys()))
+
+        # Defining Version
+        self.version = version
+
+        # Verifying cache_dir
         if isinstance(cache_dir, str):
             if not os.path.exists(cache_dir):
                 os.makedirs(cache_dir)
@@ -73,13 +85,14 @@ class Nasa(object):
         else:
             self.cache_dir = os.getcwd()
 
+        # Setting up a pydap session
         self.session = setup_session(username, password, check_url='/'.join(
             [self.mission_dict['base_url'], 'opendap', self.mission_dict['process_level']]))
 
-    def __parse_dap_xml(self, date, file_path, product, version, process_level, base_url):
-        path1 = file_path.format(mission=self.mission.upper(), product=product, year=date.year,
+    def __parse_dap_xml(self, date, file_path, process_level, base_url):
+        path1 = file_path.format(mission=self.mission.upper(), product=self.product, year=date.year,
                                  dayofyear=date.dayofyear,
-                                 version=version)
+                                 version=self.version)
         path2 = '/'.join([process_level, path1])
         url1 = '/'.join([base_url, 'opendap', path2, 'catalog.xml'])
         page1 = requests.get(url1)
@@ -124,17 +137,13 @@ class Nasa(object):
                 sleep(3)
         return ds2[dataset_types]
 
-    def __get_data(self, product, version, dataset_types, from_date, to_date, min_lat=None, max_lat=None,
-                   min_lon=None, max_lon=None, dl_sim_count=30, check_local=True):
+    def __get_data(self, dataset_types, from_date, to_date, min_lat=None, max_lat=None,
+                   min_lon=None, max_lon=None, dl_sim_count=30):
         """
         Function to download trmm or gpm data and convert it to an xarray dataset.
 
         Parameters
         ----------
-        product : str
-            Data product associated with the mission.
-        version: int
-            Data product version.
         dataset_types : str or list of str
             The dataset types variable to be extracted.
         from_date : str
@@ -153,21 +162,13 @@ class Nasa(object):
             The number of simultaneous downloads on a single thread. Speed could be increased with more simultaneous
              downloads, but up to a limit of the PC's single thread speed. Also, NASA's opendap server seems to have a
               limit to the total number of simultaneous downloads. 50-60 seems to be around the max.
-        check_local : bool
-            Should the local files be checked and read? Pass False if you only want to download files and not check for
-             local files. Any local files will be overwritten!
 
         Returns
         -------
         xarray dataset
             Coordinates are time, lon, lat
         """
-        if product not in self.mission_dict['products']:
-            raise ValueError('product must be one of: ' + ', '.join(self.mission_dict['products'].keys()))
-        else:
-            product_dict = self.mission_dict['products']
-            file_path1 = product_dict[product]
-        master_dataset_list = master_datasets[product]
+        file_path = self.mission_dict['products'][self.product]
         if isinstance(dataset_types, str):
             dataset_types = [dataset_types]
 
@@ -180,19 +181,19 @@ class Nasa(object):
         base_url = self.mission_dict['base_url']
 
         # Determine files to download:
-        if 'dayofyear' in file_path1:
+        if 'dayofyear' in file_path:
             print('Parsing file list from NASA server...')
-            file_path = os.path.split(file_path1)[0]
-            iter2 = [(date, file_path, self.mission, product, version, self.mission_dict['process_level'], base_url) for
+            file_path = os.path.split(file_path)[0]
+            iter2 = [(date, file_path, self.mission, self.mission_dict['process_level'], base_url) for
                      date in dates]
             url_list1 = ThreadPool(30).starmap(self.__parse_dap_xml, iter2)
             url_list = list(itertools.chain.from_iterable(url_list1))
 
-        elif 'month' in file_path1:
+        elif 'month' in file_path:
             print('Generating urls...')
             url_list = ['/'.join([base_url, 'opendap', self.mission_dict['process_level'],
-                                  file_path1.format(mission=self.mission.upper(), product=product, year=d.year,
-                                                    month=d.month, date=d.strftime('%Y%m%d'), version=version)]) for d
+                                  file_path.format(mission=self.mission.upper(), product=self.product, year=d.year,
+                                                    month=d.month, date=d.strftime('%Y%m%d'), version=self.version)]) for d
                         in dates]
 
         if 'hyrax' in url_list[0]:
@@ -211,7 +212,7 @@ class Nasa(object):
                 os.makedirs(path)
 
         # Downloading the data
-        iter1 = [(u, u0, self.session, master_dataset_list, dataset_types, min_lat, max_lat, min_lon, max_lon) for
+        iter1 = [(u, u0, self.session, master_datasets[self.product], dataset_types, min_lat, max_lat, min_lon, max_lon) for
                  u, u0 in url_dict.items()]
 
         output = ThreadPool(dl_sim_count).starmap(self.__download_files, iter1)
