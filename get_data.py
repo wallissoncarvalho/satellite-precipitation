@@ -89,16 +89,15 @@ class Nasa(object):
         self.session = setup_session(username, password, check_url='/'.join(
             [self.mission_dict['base_url'], 'opendap', self.mission_dict['process_level']]))
 
-    def __parse_dap_xml(self, date, file_path, process_level, base_url):
-        path1 = file_path.format(mission=self.mission.upper(), product=self.product, year=date.year,
-                                 dayofyear=date.dayofyear,
-                                 version=self.version)
-        path2 = '/'.join([process_level, path1])
-        url1 = '/'.join([base_url, 'opendap', path2, 'catalog.xml'])
-        page1 = requests.get(url1)
-        et = etree.fromstring(page1.content)
-        urls2 = [base_url + c.attrib['ID'] for c in et.getchildren()[3].getchildren() if not '.xml' in c.attrib['ID']]
-        return urls2
+    def __get_files_urls(self, date, file_path, base_url):
+        path = file_path.format(mission=self.mission.upper(), product=self.product, year=date.year,
+                                dayofyear=date.dayofyear, version=self.version)
+        path = '/'.join([self.mission_dict['process_level'], path])
+        url = '/'.join([base_url, 'opendap', path, 'catalog.xml'])
+        response = requests.get(url)
+        et = etree.fromstring(response.content)
+        urls = [base_url + c.attrib['ID'] for c in et.getchildren()[3].getchildren() if '.xml' not in c.attrib['ID']]
+        return urls
 
     def __download_files(self, url, path, master_dataset_list, dataset_types, min_lat, max_lat, min_lon, max_lon):
         print(path)
@@ -118,6 +117,7 @@ class Nasa(object):
                 ds_date1 = ds.attrs['FileHeader'].split(';\n')
                 ds_date2 = dict([t.split('=') for t in ds_date1 if t != ''])
                 ds_date = pd.to_datetime([ds_date2['StopGranuleDateTime']]).tz_convert(None)
+
                 ds2['time'] = ds_date
 
                 for ar in ds2.data_vars:
@@ -135,10 +135,11 @@ class Nasa(object):
                 print('Retrying in 3 seconds...')
                 counter = counter - 1
                 sleep(3)
+
         return ds2[dataset_types]
 
-    def __get_data(self, dataset_types, from_date, to_date, min_lat=None, max_lat=None,
-                   min_lon=None, max_lon=None, dl_sim_count=30):
+    def get_data(self, dataset_types, from_date, to_date, min_lat=None, max_lat=None, min_lon=None, max_lon=None,
+                 dl_sim_count=30):
         """
         Function to download trmm or gpm data and convert it to an xarray dataset.
 
@@ -184,17 +185,14 @@ class Nasa(object):
         if 'dayofyear' in file_path:
             print('Parsing file list from NASA server...')
             file_path = os.path.split(file_path)[0]
-            iter2 = [(date, file_path, self.mission, self.mission_dict['process_level'], base_url) for
-                     date in dates]
-            url_list1 = ThreadPool(30).starmap(self.__parse_dap_xml, iter2)
-            url_list = list(itertools.chain.from_iterable(url_list1))
+            iteration = [(date, file_path, base_url) for date in dates]
+            url_list = list(itertools.chain.from_iterable(ThreadPool(30).starmap(self.__get_files_urls, iteration)))
 
         elif 'month' in file_path:
             print('Generating urls...')
             url_list = ['/'.join([base_url, 'opendap', self.mission_dict['process_level'],
-                                  file_path.format(mission=self.mission.upper(), product=self.product, year=d.year,
-                                                    month=d.month, date=d.strftime('%Y%m%d'), version=self.version)]) for d
-                        in dates]
+                        file_path.format(mission=self.mission.upper(), product=self.product, year=d.year, month=d.month,
+                                         date=d.strftime('%Y%m%d'), version=self.version)]) for d in dates]
 
         if 'hyrax' in url_list[0]:
             split_text = 'hyrax/'
@@ -205,14 +203,14 @@ class Nasa(object):
             u: os.path.join(self.cache_dir, os.path.splitext(u.split(split_text)[1])[0] + '.nc4') for
             u in url_list}
 
-        path_set = set(url_dict.values())
         save_dirs = set([os.path.split(u)[0] for u in url_dict.values()])
         for path in save_dirs:
             if not os.path.exists(path):
                 os.makedirs(path)
 
         # Downloading the data
-        iter1 = [(u, u0, self.session, master_datasets[self.product], dataset_types, min_lat, max_lat, min_lon, max_lon) for
+        iter1 = [(u, u0, self.session, master_datasets[self.product], dataset_types, min_lat, max_lat, min_lon, max_lon)
+                 for
                  u, u0 in url_dict.items()]
 
         output = ThreadPool(dl_sim_count).starmap(self.__download_files, iter1)
