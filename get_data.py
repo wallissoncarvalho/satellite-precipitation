@@ -16,7 +16,7 @@ from pydap.cas.urs import setup_session
 from base import mission_product_dict, master_datasets
 
 
-class Nasa(object):
+class Nasa:
     """
     Class to download, select, and convert NASA data via opendap.
 
@@ -69,7 +69,7 @@ class Nasa(object):
         self.mission = mission
 
         # Verifying the product
-        if product in self.mission_dict['product']:
+        if product in self.mission_dict['products']:
             self.product = product
         else:
             raise ValueError('Product must be one of: ' + ', '.join(self.mission_dict['products'].keys()))
@@ -181,7 +181,7 @@ class Nasa(object):
 
         base_url = self.mission_dict['base_url']
 
-        # Determine files to download:
+        # Getting files' url:
         if 'dayofyear' in file_path:
             print('Parsing file list from NASA server...')
             file_path = os.path.split(file_path)[0]
@@ -194,16 +194,16 @@ class Nasa(object):
                         file_path.format(mission=self.mission.upper(), product=self.product, year=d.year, month=d.month,
                                          date=d.strftime('%Y%m%d'), version=self.version)]) for d in dates]
 
+        # Setting up local urls
         if 'hyrax' in url_list[0]:
             split_text = 'hyrax/'
         else:
             split_text = 'opendap/'
 
-        url_dict = {
-            u: os.path.join(self.cache_dir, os.path.splitext(u.split(split_text)[1])[0] + '.nc4') for
-            u in url_list}
+        url_dict = {url: os.path.join(self.cache_dir, os.path.splitext(url.split(split_text)[1])[0] + '.nc4') for url in
+                    url_list}
+        save_dirs = set([os.path.split(url)[0] for url in url_dict.values()])
 
-        save_dirs = set([os.path.split(u)[0] for u in url_dict.values()])
         for path in save_dirs:
             if not os.path.exists(path):
                 os.makedirs(path)
