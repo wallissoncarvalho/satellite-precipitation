@@ -6,6 +6,7 @@ This file is based on https://github.com/mullenkamp/nasadap
 """
 import os
 import pandas as pd
+import numpy as np
 import xarray as xr
 import requests
 from time import sleep
@@ -13,6 +14,7 @@ from lxml import etree
 import itertools
 from multiprocessing.pool import ThreadPool
 from pydap.cas.urs import setup_session
+from pydap.client import open_url
 from base import mission_product_dict, master_datasets
 
 
@@ -99,47 +101,69 @@ class Nasa:
         urls = [base_url + c.attrib['ID'] for c in et.getchildren()[3].getchildren() if '.xml' not in c.attrib['ID']]
         return urls
 
-    def __download_files(self, url, path, master_dataset_list, dataset_types, min_lat, max_lat, min_lon, max_lon):
+    def __download_files(self, url, path, datasets, min_lat, max_lat, min_lon, max_lon):
+
+        # Setting up coordinates
+        range_lon = np.round(np.arange(-179.95, 180, 0.1), 2)
+        range_lat = np.round(np.arange(-89.95, 90, 0.1), 2)
+        min_lon = (np.abs(range_lon - min_lon)).argmin()
+        max_lon = (np.abs(range_lon - max_lon)).argmin()
+        min_lat = (np.abs(range_lat - min_lat)).argmin()
+        max_lat = (np.abs(range_lat - max_lat)).argmin()
+
+        if min_lon >= max_lon:
+            raise ValueError('min_lon must be smaller than max_lon')
+        if min_lat >= max_lat:
+            raise ValueError('min_lat must be smaller than max_lat')
+
+        coordinates = '[0:1:0][{min_lon}:1:{max_lon}][{min_lat}:1:{max_lat}]'.format(min_lon=min_lon, max_lon=max_lon,
+                                                                                     min_lat=min_lat, max_lat=max_lat)
+
+        #Update url
+        url += '?'
+        if 'precipitationQualityIndex' in datasets:
+            url += 'precipitationQualityIndex'+coordinates + ','
+        if 'IRkalmanFilterWeight' in datasets:
+            url += 'IRkalmanFilterWeight' + coordinates + ','
+        if 'HQprecipSource' in datasets:
+            url += 'HQprecipSource' + coordinates + ','
+        if 'precipitationCal' in datasets:
+            url += 'precipitationCal' + coordinates + ','
+        if 'precipitationUncal' in datasets:
+            url += 'precipitationUncal' + coordinates + ','
+        if 'HQprecipitation' in datasets:
+            url += 'HQprecipitation' + coordinates + ','
+        if 'probabilityLiquidPrecipitation' in datasets:
+            url += 'probabilityLiquidPrecipitation' + coordinates + ','
+        if 'HQobservationTime' in datasets:
+            url += 'HQobservationTime' + coordinates + ','
+        if 'randomError' in datasets:
+            url += 'randomError' + coordinates + ','
+        if 'IRprecipitation' in datasets:
+            url += 'IRprecipitation' + coordinates + ','
+
+        url += 'lat[{min_lat}:1:{max_lat}],'.format(min_lat=min_lat, max_lat=max_lat)
+        url += 'lon[{min_lon}:1:{max_lon}],'.format(min_lon=min_lon, max_lon=max_lon)
+        url += 'time[0:1:0]'
+
         print(path)
-        counter = 4
+        counter = 5
         while counter > 0:
             try:
-                store = xr.backends.PydapDataStore.open(url, session=self.session)
-                ds = xr.open_dataset(store, decode_cf=False)
-
-                if 'nlon' in ds:
-                    ds = ds.rename({'nlon': 'lon', 'nlat': 'lat'})
-                ds2 = ds[master_dataset_list].sel(lat=slice(min_lat, max_lat), lon=slice(min_lon, max_lon))
-
-                lat = ds2.lat.values
-                lon = ds2.lon.values
-
-                ds_date1 = ds.attrs['FileHeader'].split(';\n')
-                ds_date2 = dict([t.split('=') for t in ds_date1 if t != ''])
-                ds_date = pd.to_datetime([ds_date2['StopGranuleDateTime']]).tz_convert(None)
-
-                ds2['time'] = ds_date
-
-                for ar in ds2.data_vars:
-                    da1 = xr.DataArray(ds2[ar].values.reshape(1, len(lon), len(lat)), coords=[ds_date, lon, lat],
-                                       dims=['time', 'lon', 'lat'], name=ar)
-                    da1.attrs = ds2[ar].attrs
-                    ds2[ar] = da1
-                counter = 0
-
-                # Save data as cache
+                pydap_ds = open_url(url, session=self.session)
+                store = xr.backends.PydapDataStore(pydap_ds)
+                ds = xr.open_dataset(store)
                 if not os.path.isfile(path):
-                    ds2.to_netcdf(path)
+                    ds.to_netcdf(path)
+                counter = 0
+                return ds
             except Exception as err:
                 print(err)
                 print('Retrying in 3 seconds...')
                 counter = counter - 1
                 sleep(3)
 
-        return ds2[dataset_types]
-
-    def get_data(self, dataset_types, from_date, to_date, min_lat=None, max_lat=None, min_lon=None, max_lon=None,
-                 dl_sim_count=30):
+    def get_data(self, from_date, to_date, min_lat=None, max_lat=None, min_lon=None, max_lon=None):
         """
         Function to download trmm or gpm data and convert it to an xarray dataset.
 
@@ -159,10 +183,6 @@ class Nasa:
             The minimum lon to extract in WGS84 decimal degrees.
         max_lon : int, float, or None
             The maximum lon to extract in WGS84 decimal degrees.
-        dl_sim_count : int
-            The number of simultaneous downloads on a single thread. Speed could be increased with more simultaneous
-             downloads, but up to a limit of the PC's single thread speed. Also, NASA's opendap server seems to have a
-              limit to the total number of simultaneous downloads. 50-60 seems to be around the max.
 
         Returns
         -------
@@ -170,8 +190,6 @@ class Nasa:
             Coordinates are time, lon, lat
         """
         file_path = self.mission_dict['products'][self.product]
-        if isinstance(dataset_types, str):
-            dataset_types = [dataset_types]
 
         # Must implemented the date verification with min and max dates.
         from_date = pd.Timestamp(from_date)
@@ -183,7 +201,7 @@ class Nasa:
 
         # Getting files' url:
         if 'dayofyear' in file_path:
-            print('Parsing file list from NASA server...')
+            print("Getting the files' url from NASA server...")
             file_path = os.path.split(file_path)[0]
             iteration = [(date, file_path, base_url) for date in dates]
             url_list = list(itertools.chain.from_iterable(ThreadPool(30).starmap(self.__get_files_urls, iteration)))
@@ -193,28 +211,30 @@ class Nasa:
             url_list = ['/'.join([base_url, 'opendap', self.mission_dict['process_level'],
                         file_path.format(mission=self.mission.upper(), product=self.product, year=d.year, month=d.month,
                                          date=d.strftime('%Y%m%d'), version=self.version)]) for d in dates]
-
+        return url_list
         # Setting up local urls
-        if 'hyrax' in url_list[0]:
-            split_text = 'hyrax/'
-        else:
-            split_text = 'opendap/'
-
-        url_dict = {url: os.path.join(self.cache_dir, os.path.splitext(url.split(split_text)[1])[0] + '.nc4') for url in
-                    url_list}
-        save_dirs = set([os.path.split(url)[0] for url in url_dict.values()])
-
-        for path in save_dirs:
-            if not os.path.exists(path):
-                os.makedirs(path)
-
-        # Downloading the data
-        iter1 = [(u, u0, self.session, master_datasets[self.product], dataset_types, min_lat, max_lat, min_lon, max_lon)
-                 for
-                 u, u0 in url_dict.items()]
-
-        output = ThreadPool(dl_sim_count).starmap(self.__download_files, iter1)
-        ds_list = []
-        ds_list.extend(output)
-        ds_all = xr.concat(ds_list, dim='time').sortby('time')
-        return ds_all
+        # if 'hyrax' in url_list[0]:
+        #     split_text = 'hyrax/'
+        # else:
+        #     split_text = 'opendap/'
+        #
+        # url_dict = {url: os.path.join(self.cache_dir, os.path.splitext(url.split(split_text)[1])[0] + '.nc4') for url in
+        #             url_list}
+        #
+        # save_dirs = set([os.path.split(url)[0] for url in url_dict.values()])
+        #
+        # for path in save_dirs:
+        #     if not os.path.exists(path):
+        #         os.makedirs(path)
+        #
+        # # Downloading the data
+        # iteration = [(url, path, min_lat, max_lat, min_lon, max_lon) for url, path in url_dict.items()]
+        #
+        # print('Downloading the data...')
+        # output = ThreadPool(30).starmap(self.__download_files, iteration)
+        # return output
+        # ds_list = []
+        # ds_list.extend(output)
+        # print('Converting the data...')
+        # ds_all = xr.concat(ds_list, dim='time').sortby('time')
+        # return ds_all
